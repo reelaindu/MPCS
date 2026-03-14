@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>{% block title %}Shop Quality System{% endblock %}</title>
+
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  {% block page_css %}{% endblock %}
+</head>
+
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-badge">
+          <span class="brand-dot"></span>
+          <span>Secure Portal</span>
+        </div>
+
+        <div class="brand-title">Shop Quality System</div>
+        <div class="brand-sub">Admin • User • PDF • Uploads</div>
+      </div>
+
+      <nav class="nav">
+        <a class="nav-item" href="{{ url_for('dashboard') }}">Dashboard</a>
+        <a class="nav-item" href="{{ url_for('shops') }}">Shops</a>
+        <a class="nav-item" href="{{ url_for('information') }}">Information</a>
+        <a class="nav-item" href="{{ url_for('fast_items') }}">Fast Items</a>
+        <a class="nav-item" href="{{ url_for('contacts') }}">Contacts</a>
+        <a class="nav-item" href="{{ url_for('pdf_page') }}">PDF</a>
+
+        <div class="nav-sep"></div>
+
+        <a class="nav-item nav-danger" href="{{ url_for('logout') }}">Logout</a>
+      </nav>
+
+      <div class="side-footer">
+        <div class="pill-row">
+          <span class="pill">Mobile Friendly</span>
+          <span class="pill">Uploads</span>
+          <span class="pill">PDF Export</span>
+          <span class="pill">Admin Control</span>
+        </div>
+
+        <div class="support">
+          If you have alerts, contact: <b>0764247716</b>
+        </div>
+
+        <div class="copy">
+          © <span id="year"></span> — <b>Induwara Thathsara</b>
+        </div>
+      </div>
+    </aside>
+
+    <main class="content">
+      <header class="topbar">
+        <div class="topbar-left">
+          <h1 class="page-title">{% block page_title %}{% endblock %}</h1>
+          <p class="page-sub">{% block page_subtitle %}{% endblock %}</p>
+        </div>
+
+        <div class="topbar-right">
+          {% if session.get("user") %}
+            <div class="user-chip">
+              <span class="user-dot"></span>
+              <div class="user-meta">
+                <div class="user-name">{{ session.get("user").get("username") }}</div>
+                <div class="user-role">{{ session.get("user").get("role") }}</div>
+              </div>
+            </div>
+          {% endif %}
+
+          {% block top_actions %}{% endblock %}
+        </div>
+      </header>
+
+      <div class="flash-area">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for cat, msg in messages %}
+              <div class="flash {{ cat }}">{{ msg }}</div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+      </div>
+
+      <section class="page">
+        {% block content %}{% endblock %}
+      </section>
+    </main>
+  </div>
+
+  <script>
+    document.getElementById("year").textContent = new Date().getFullYear();
+  </script>
+
+  {% block page_js %}{% endblock %}
+</body>
+</html>

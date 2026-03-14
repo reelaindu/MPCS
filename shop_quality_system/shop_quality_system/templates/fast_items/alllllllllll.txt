@@ -1,0 +1,1430 @@
+app.py
+
+import os
+import shutil
+from datetime import datetime
+from pathlib import Path
+
+from flask import (
+    Flask, render_template, request, redirect, url_for,
+    flash, session, send_file, abort
+)
+from werkzeug.utils import secure_filename
+
+from models import (
+    init_db,
+    create_user,  # ✅ use create_user
+    get_user_by_username, verify_password,
+    list_shops, get_shop, create_shop, update_shop, delete_shop,
+    list_info_summaries, get_info, create_info, update_info, delete_info,
+    list_info_dates_for_shop,
+    list_exp_items, create_exp_item, get_exp_item, update_exp_item, delete_exp_item,
+    list_contacts, create_contact, get_contact, update_contact, delete_contact,
+)
+
+from pdf_utils import build_exp_items_pdf
+
+APP_DIR = Path(__file__).resolve().parent
+STATIC_DIR = APP_DIR / "static"
+UPLOAD_ROOT = STATIC_DIR / "uploads"
+
+
+# ---------------- Helpers ----------------
+def slugify(name: str) -> str:
+    s = name.strip().lower()
+    s = "".join(ch if ch.isalnum() else "-" for ch in s)
+    s = "-".join(filter(None, s.split("-")))
+    return s or "shop"
+
+
+def shop_folder(shop_name: str) -> Path:
+    return UPLOAD_ROOT / slugify(shop_name)
+
+
+def ensure_shop_folders(shop_name: str) -> None:
+    root = shop_folder(shop_name)
+    (root / "shop_photo").mkdir(parents=True, exist_ok=True)
+    (root / "exp_item").mkdir(parents=True, exist_ok=True)
+    (root / "other_messages").mkdir(parents=True, exist_ok=True)  # ✅ NEW
+
+
+def remove_shop_folder(shop_name: str) -> None:
+    root = shop_folder(shop_name)
+    if root.exists():
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def move_shop_folder(old_name: str, new_name: str) -> None:
+    old_root = shop_folder(old_name)
+    new_root = shop_folder(new_name)
+
+    if old_root.exists() and old_root != new_root:
+        if new_root.exists():
+            shutil.rmtree(new_root, ignore_errors=True)
+        new_root.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(old_root), str(new_root))
+
+    ensure_shop_folders(new_name)
+
+
+def allowed_image(filename: str) -> bool:
+    ext = (filename.rsplit(".", 1)[-1] if "." in filename else "").lower()
+    return ext in {"png", "jpg", "jpeg", "webp"}
+
+
+# ---------------- Other TXT helpers ----------------
+def other_txt_path(shop_name: str, info_id: int) -> Path:
+    """
+    Always same filename for the same info_id.
+    So EDIT => overwrite/replace the old txt (no duplicates).
+    """
+    ensure_shop_folders(shop_name)
+    return shop_folder(shop_name) / "other_messages" / f"other_info_{info_id}.txt"
+
+
+def write_other_message_txt(shop_name: str, info_id: int, inspector: str, message: str) -> str:
+    """
+    Saves EXACT structure:
+
+    Shop : Sunrise Shop
+    Date : 2026-03-05
+    Time : 14:22:05
+    Inspector : Induwara Thathsara
+
+    Message :
+    Freezer not working properly
+    """
+    now = datetime.now()
+    content = (
+        f"Shop : {shop_name}\n"
+        f"Date : {now.strftime('%Y-%m-%d')}\n"
+        f"Time : {now.strftime('%H:%M:%S')}\n"
+        f"Inspector : {inspector}\n\n"
+        f"Message :\n"
+        f"{(message or '').strip()}\n"
+    )
+
+    pth = other_txt_path(shop_name, info_id)
+
+    # atomic-ish write (avoid partial files)
+    tmp = pth.with_suffix(".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    tmp.replace(pth)
+
+    # ✅ for debugging in CMD
+    print("✅ OTHER TXT SAVED/UPDATED =>", pth)
+
+    # return relative path (optional)
+    return str(pth.relative_to(APP_DIR)).replace("\\", "/")
+
+
+def delete_other_message_txt(shop_name: str, info_id: int) -> None:
+    pth = other_txt_path(shop_name, info_id)
+    try:
+        if pth.exists():
+            pth.unlink()
+            print("🗑️ OTHER TXT DELETED =>", pth)
+    except Exception as e:
+        print("⚠️ OTHER TXT DELETE FAILED:", e)
+
+
+# ---------------- App ----------------
+app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
+app.config["MAX_CONTENT_LENGTH"] = 15 * 1024 * 1024  # 15MB
+
+DB_PATH = str(APP_DIR / "app.db")
+
+
+# ---------------- Startup (Flask 3.x safe) ----------------
+init_db(DB_PATH)
+UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+
+# ✅ Default Accounts (create only if not exists)
+DEFAULT_ADMIN_USER = "Induwara Thathsara"
+DEFAULT_ADMIN_PASS = "itk5892"
+
+DEFAULT_USER_USER = "user"
+DEFAULT_USER_PASS = "123"
+
+if not get_user_by_username(DB_PATH, DEFAULT_ADMIN_USER):
+    try:
+        create_user(DB_PATH, DEFAULT_ADMIN_USER, DEFAULT_ADMIN_PASS, "admin")
+        print("✅ Default admin created:", DEFAULT_ADMIN_USER)
+    except Exception as e:
+        print("⚠️ Admin create skipped:", e)
+
+if not get_user_by_username(DB_PATH, DEFAULT_USER_USER):
+    try:
+        create_user(DB_PATH, DEFAULT_USER_USER, DEFAULT_USER_PASS, "user")
+        print("✅ Default user created:", DEFAULT_USER_USER)
+    except Exception as e:
+        print("⚠️ User create skipped:", e)
+
+# (Optional) env-based extra seeding
+admin_u = os.environ.get("FIRST_ADMIN_USER")
+admin_p = os.environ.get("FIRST_ADMIN_PASS")
+if admin_u and admin_p and not get_user_by_username(DB_PATH, admin_u):
+    try:
+        create_user(DB_PATH, admin_u, admin_p, "admin")
+    except Exception:
+        pass
+
+user_u = os.environ.get("FIRST_USER_USER")
+user_p = os.environ.get("FIRST_USER_PASS")
+if user_u and user_p and not get_user_by_username(DB_PATH, user_u):
+    try:
+        create_user(DB_PATH, user_u, user_p, "user")
+    except Exception:
+        pass
+
+
+# ---------------- Auth helpers ----------------
+def current_user():
+    return session.get("user")
+
+
+def login_required(fn):
+    from functools import wraps
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not current_user():
+            return redirect(url_for("login"))
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
+def admin_required(fn):
+    from functools import wraps
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        u_ = current_user()
+        if not u_:
+            return redirect(url_for("login"))
+        if u_.get("role") != "admin":
+            flash("Admin only.", "danger")
+            return redirect(url_for("dashboard"))
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
+# ---------------- Routes ----------------
+@app.get("/")
+def index():
+    if current_user():
+        return redirect(url_for("dashboard"))
+    return redirect(url_for("login"))
+
+
+# ✅ LOGIN with ROLE check
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        role = (request.form.get("role") or "").strip().lower()
+        username = (request.form.get("username") or "").strip()
+        password = request.form.get("password") or ""
+
+        if role not in {"admin", "user"}:
+            flash("Select a valid role.", "danger")
+            return render_template("login.html")
+
+        user = get_user_by_username(DB_PATH, username)
+
+        if not user or not verify_password(password, user["password_hash"]):
+            flash("Invalid username or password", "danger")
+            return render_template("login.html")
+
+        if role != user["role"]:
+            flash("Invalid role selected", "danger")
+            return render_template("login.html")
+
+        session["user"] = {"id": user["id"], "username": user["username"], "role": user["role"]}
+        flash("Login successful", "success")
+        return redirect(url_for("dashboard"))
+
+    return render_template("login.html")
+
+
+@app.get("/logout")
+def logout():
+    session.clear()
+    flash("Logged out", "info")
+    return redirect(url_for("login"))
+
+
+@app.get("/dashboard")
+@login_required
+def dashboard():
+    return render_template("dashboard.html")
+
+
+# ---------------- Shops ----------------
+@app.get("/shops")
+@login_required
+def shops():
+    items = list_shops(DB_PATH)
+    return render_template("shops/list.html", shops=items)
+
+
+@app.route("/shops/add", methods=["GET", "POST"])
+@admin_required
+def shops_add():
+    if request.method == "POST":
+        name = (request.form.get("name") or "").strip()
+        location = (request.form.get("location") or "").strip()
+        shop_type = (request.form.get("shop_type") or "").strip()
+        pos_system = (request.form.get("pos_system") or "").strip()
+
+        errors = []
+        if not name:
+            errors.append("Name is required.")
+        if not location:
+            errors.append("Location is required.")
+        if shop_type not in {"Co-Op", "Mini Co-Op", "Regional"}:
+            errors.append("Shop type is required.")
+        if pos_system not in {"Yes", "No"}:
+            errors.append("POS System selection is required.")
+
+        photo = request.files.get("shop_photo")
+        photo_rel = None
+        if photo and photo.filename:
+            if not allowed_image(photo.filename):
+                errors.append("Shop photo must be png/jpg/jpeg/webp.")
+
+        if errors:
+            for e in errors:
+                flash(e, "danger")
+            return render_template("shops/add_edit.html", mode="add", shop=None)
+
+        ensure_shop_folders(name)
+
+        if photo and photo.filename:
+            fn = secure_filename(photo.filename)
+            dest = shop_folder(name) / "shop_photo" / f"shop_{int(datetime.utcnow().timestamp())}_{fn}"
+            photo.save(dest)
+            photo_rel = str(dest.relative_to(STATIC_DIR)).replace("\\", "/")
+
+        create_shop(DB_PATH, name, location, shop_type, pos_system, photo_rel)
+        flash("Shop saved", "success")
+        return redirect(url_for("shops"))
+
+    return render_template("shops/add_edit.html", mode="add", shop=None)
+
+
+@app.route("/shops/<int:shop_id>/edit", methods=["GET", "POST"])
+@admin_required
+def shops_edit(shop_id):
+    shop = get_shop(DB_PATH, shop_id)
+    if not shop:
+        abort(404)
+
+    if request.method == "POST":
+        new_name = (request.form.get("name") or "").strip()
+        location = (request.form.get("location") or "").strip()
+        shop_type = (request.form.get("shop_type") or "").strip()
+        pos_system = (request.form.get("pos_system") or "").strip()
+
+        errors = []
+        if not new_name:
+            errors.append("Name is required.")
+        if not location:
+            errors.append("Location is required.")
+        if shop_type not in {"Co-Op", "Mini Co-Op", "Regional"}:
+            errors.append("Shop type is required.")
+        if pos_system not in {"Yes", "No"}:
+            errors.append("POS System selection is required.")
+
+        photo = request.files.get("shop_photo")
+        photo_rel = shop["shop_photo"]
+        if photo and photo.filename:
+            if not allowed_image(photo.filename):
+                errors.append("Shop photo must be png/jpg/jpeg/webp.")
+
+        if errors:
+            for e in errors:
+                flash(e, "danger")
+            return render_template("shops/add_edit.html", mode="edit", shop=shop)
+
+        if shop["name"] != new_name:
+            move_shop_folder(shop["name"], new_name)
+
+        if photo and photo.filename:
+            ensure_shop_folders(new_name)
+            fn = secure_filename(photo.filename)
+            dest = shop_folder(new_name) / "shop_photo" / f"shop_{int(datetime.utcnow().timestamp())}_{fn}"
+            photo.save(dest)
+            photo_rel = str(dest.relative_to(STATIC_DIR)).replace("\\", "/")
+
+        update_shop(DB_PATH, shop_id, new_name, location, shop_type, pos_system, photo_rel)
+        flash("Shop updated", "success")
+        return redirect(url_for("shops"))
+
+    return render_template("shops/add_edit.html", mode="edit", shop=shop)
+
+
+@app.post("/shops/<int:shop_id>/delete")
+@admin_required
+def shops_delete(shop_id):
+    shop = get_shop(DB_PATH, shop_id)
+    if not shop:
+        abort(404)
+
+    delete_shop(DB_PATH, shop_id)
+    remove_shop_folder(shop["name"])
+
+    flash("Shop deleted", "warning")
+    return redirect(url_for("shops"))
+
+
+# ---------------- Information ----------------
+@app.get("/information")
+@login_required
+def information():
+    summaries = list_info_summaries(DB_PATH)
+    return render_template("information/list.html", summaries=summaries)
+
+
+@app.route("/information/add", methods=["GET", "POST"])
+@admin_required
+def info_add():
+    shops_list = list_shops(DB_PATH)
+
+    if request.method == "POST":
+        shop_id = request.form.get("shop_id")
+        ratings = {
+            "clean": request.form.get("clean"),
+            "management": request.form.get("management"),
+            "environment": request.form.get("environment"),
+            "quality": request.form.get("quality"),
+        }
+        expired = request.form.get("expired")
+        expired_amount = (request.form.get("expired_amount") or "").strip()
+        other = request.form.get("other")
+        other_message = (request.form.get("other_message") or "").strip()
+
+        errors = []
+        if not shop_id:
+            errors.append("Shop is required.")
+        for k, v in ratings.items():
+            if v not in {"Best", "Good", "Not Bad", "Super"}:
+                errors.append(f"{k.title()} rating is required.")
+        if expired not in {"Yes", "No"}:
+            errors.append("Expired Items Yes/No is required.")
+        if expired_amount == "":
+            errors.append("Expired Items Amount is required (0 allowed).")
+        else:
+            try:
+                int(expired_amount)
+            except:
+                errors.append("Expired Items Amount must be a number.")
+        if other not in {"Yes", "No"}:
+            errors.append("Other Yes/No is required.")
+        if other == "Yes" and not other_message:
+            errors.append("Other message is required when Other = Yes.")
+
+        photo = request.files.get("expired_photo")
+        photo_rel = None
+        if photo and photo.filename:
+            if not allowed_image(photo.filename):
+                errors.append("Expired photo must be png/jpg/jpeg/webp.")
+        if expired == "Yes" and (not photo or not photo.filename):
+            errors.append("Expired Items Photo is required when Expired Items = Yes.")
+
+        if errors:
+            for e in errors:
+                flash(e, "danger")
+            return render_template("information/add_edit.html", mode="add", shops=shops_list, info=None)
+
+        shop = get_shop(DB_PATH, int(shop_id))
+        ensure_shop_folders(shop["name"])
+
+        if photo and photo.filename:
+            fn = secure_filename(photo.filename)
+            dest = shop_folder(shop["name"]) / "exp_item" / f"expired_{int(datetime.utcnow().timestamp())}_{fn}"
+            photo.save(dest)
+            photo_rel = str(dest.relative_to(STATIC_DIR)).replace("\\", "/")
+
+        # ✅ FIRST create info => get info_id
+        info_id = create_info(
+            DB_PATH, int(shop_id),
+            ratings["clean"], ratings["management"], ratings["environment"], ratings["quality"],
+            expired, int(expired_amount), photo_rel,
+            other, other_message
+        )
+
+        # ✅ THEN write TXT (fixed filename other_info_{info_id}.txt)
+        if other == "Yes" and other_message:
+            inspector = (session.get("user") or {}).get("username", "Unknown")
+            write_other_message_txt(shop["name"], info_id, inspector, other_message)
+
+        flash("Information saved", "success")
+        return redirect(url_for("info_view", info_id=info_id))
+
+    return render_template("information/add_edit.html", mode="add", shops=shops_list, info=None)
+
+
+@app.get("/information/<int:info_id>")
+@login_required
+def info_view(info_id):
+    info = get_info(DB_PATH, info_id)
+    if not info:
+        abort(404)
+    shop = get_shop(DB_PATH, info["shop_id"])
+    exp_items = list_exp_items(DB_PATH, info_id)
+    return render_template("information/view.html", info=info, shop=shop, exp_items=exp_items)
+
+
+@app.route("/information/<int:info_id>/edit", methods=["GET", "POST"])
+@admin_required
+def info_edit(info_id):
+    info = get_info(DB_PATH, info_id)
+    if not info:
+        abort(404)
+    shops_list = list_shops(DB_PATH)
+
+    if request.method == "POST":
+        old_shop = get_shop(DB_PATH, info["shop_id"])  # ✅ before changes
+
+        shop_id = request.form.get("shop_id")
+        ratings = {
+            "clean": request.form.get("clean"),
+            "management": request.form.get("management"),
+            "environment": request.form.get("environment"),
+            "quality": request.form.get("quality"),
+        }
+        expired = request.form.get("expired")
+        expired_amount = (request.form.get("expired_amount") or "").strip()
+        other = request.form.get("other")
+        other_message = (request.form.get("other_message") or "").strip()
+
+        errors = []
+        if not shop_id:
+            errors.append("Shop is required.")
+        for k, v in ratings.items():
+            if v not in {"Best", "Good", "Not Bad", "Super"}:
+                errors.append(f"{k.title()} rating is required.")
+        if expired not in {"Yes", "No"}:
+            errors.append("Expired Items Yes/No is required.")
+        if expired_amount == "":
+            errors.append("Expired Items Amount is required (0 allowed).")
+        else:
+            try:
+                int(expired_amount)
+            except:
+                errors.append("Expired Items Amount must be a number.")
+        if other not in {"Yes", "No"}:
+            errors.append("Other Yes/No is required.")
+        if other == "Yes" and not other_message:
+            errors.append("Other message is required when Other = Yes.")
+
+        photo = request.files.get("expired_photo")
+        photo_rel = info["expired_photo"]
+        if photo and photo.filename:
+            if not allowed_image(photo.filename):
+                errors.append("Expired photo must be png/jpg/jpeg/webp.")
+        if expired == "Yes" and (not photo_rel) and (not photo or not photo.filename):
+            errors.append("Expired Items Photo is required when Expired Items = Yes.")
+
+        if errors:
+            for e in errors:
+                flash(e, "danger")
+            return render_template("information/add_edit.html", mode="edit", shops=shops_list, info=info)
+
+        new_shop = get_shop(DB_PATH, int(shop_id))
+        ensure_shop_folders(new_shop["name"])
+
+        # handle photo replace
+        if photo and photo.filename:
+            fn = secure_filename(photo.filename)
+            dest = shop_folder(new_shop["name"]) / "exp_item" / f"expired_{int(datetime.utcnow().timestamp())}_{fn}"
+            photo.save(dest)
+            photo_rel = str(dest.relative_to(STATIC_DIR)).replace("\\", "/")
+
+        # ✅ Update DB first
+        update_info(
+            DB_PATH, info_id, int(shop_id),
+            ratings["clean"], ratings["management"], ratings["environment"], ratings["quality"],
+            expired, int(expired_amount), photo_rel,
+            other, other_message
+        )
+
+        # ✅ TXT behavior:
+        # - if shop changed: delete old txt from old shop folder
+        # - if Other=Yes: write/overwrite txt in new shop folder (same filename => replace)
+        # - if Other=No: delete txt (from old shop and new shop)
+        if old_shop and new_shop and old_shop["name"] != new_shop["name"]:
+            delete_other_message_txt(old_shop["name"], info_id)
+
+        if other == "Yes" and other_message:
+            inspector = (session.get("user") or {}).get("username", "Unknown")
+            write_other_message_txt(new_shop["name"], info_id, inspector, other_message)
+        else:
+            # ensure old file removed if user changed Yes->No or cleared message
+            if old_shop:
+                delete_other_message_txt(old_shop["name"], info_id)
+            if new_shop:
+                delete_other_message_txt(new_shop["name"], info_id)
+
+        flash("Information updated", "success")
+        return redirect(url_for("info_view", info_id=info_id))
+
+    return render_template("information/add_edit.html", mode="edit", shops=shops_list, info=info)
+
+
+@app.post("/information/<int:info_id>/delete")
+@admin_required
+def info_delete(info_id):
+    # delete txt too
+    info = get_info(DB_PATH, info_id)
+    if info:
+        shop = get_shop(DB_PATH, info["shop_id"])
+        if shop:
+            delete_other_message_txt(shop["name"], info_id)
+
+    delete_info(DB_PATH, info_id)
+    flash("Information deleted", "warning")
+    return redirect(url_for("information"))
+
+
+@app.post("/information/<int:info_id>/expired_photo/delete")
+@admin_required
+def expired_photo_delete(info_id):
+    info = get_info(DB_PATH, info_id)
+    if not info:
+        abort(404)
+
+    if info["expired_photo"]:
+        pth = STATIC_DIR / info["expired_photo"]
+        try:
+            if pth.exists():
+                pth.unlink()
+        except:
+            pass
+
+    update_info(
+        DB_PATH, info["id"], info["shop_id"],
+        info["clean"], info["management"], info["environment"], info["quality"],
+        info["expired"], info["expired_amount"], None,
+        info["other"], info["other_message"]
+    )
+    flash("Expired photo removed", "info")
+    return redirect(url_for("info_view", info_id=info["id"]))
+
+
+# ---------------- Exp Items CRUD ----------------
+@app.route("/information/<int:info_id>/exp/add", methods=["POST"])
+@admin_required
+def exp_add(info_id):
+    name = (request.form.get("name") or "").strip()
+    exp_d = (request.form.get("exp_d") or "").strip()
+    mf_d = (request.form.get("mf_d") or "").strip()
+    amount = (request.form.get("amount") or "").strip()
+    price = (request.form.get("price") or "").strip()
+
+    errors = []
+    if not name:
+        errors.append("Name is required.")
+    if not exp_d:
+        errors.append("EXP.D is required.")
+    if not mf_d:
+        errors.append("MF.D is required.")
+    if amount == "":
+        errors.append("Amount is required.")
+    if price == "":
+        errors.append("Price is required.")
+
+    try:
+        int(amount)
+    except:
+        errors.append("Amount must be a number.")
+    try:
+        float(price)
+    except:
+        errors.append("Price must be a number.")
+
+    if errors:
+        for e in errors:
+            flash(e, "danger")
+        return redirect(url_for("info_view", info_id=info_id))
+
+    create_exp_item(DB_PATH, info_id, name, exp_d, mf_d, int(amount), float(price))
+    flash("Expired item added", "success")
+    return redirect(url_for("info_view", info_id=info_id))
+
+
+@app.route("/exp/<int:item_id>/edit", methods=["GET", "POST"])
+@admin_required
+def exp_edit(item_id):
+    item = get_exp_item(DB_PATH, item_id)
+    if not item:
+        abort(404)
+
+    if request.method == "POST":
+        name = (request.form.get("name") or "").strip()
+        exp_d = (request.form.get("exp_d") or "").strip()
+        mf_d = (request.form.get("mf_d") or "").strip()
+        amount = (request.form.get("amount") or "").strip()
+        price = (request.form.get("price") or "").strip()
+
+        errors = []
+        if not name:
+            errors.append("Name is required.")
+        if not exp_d:
+            errors.append("EXP.D is required.")
+        if not mf_d:
+            errors.append("MF.D is required.")
+
+        try:
+            int(amount)
+        except:
+            errors.append("Amount must be a number.")
+        try:
+            float(price)
+        except:
+            errors.append("Price must be a number.")
+
+        if errors:
+            for e in errors:
+                flash(e, "danger")
+            return render_template("information/exp_edit.html", item=item)
+
+        update_exp_item(DB_PATH, item_id, name, exp_d, mf_d, int(amount), float(price))
+        flash("Expired item updated", "success")
+        return redirect(url_for("info_view", info_id=item["info_id"]))
+
+    return render_template("information/exp_edit.html", item=item)
+
+
+@app.post("/exp/<int:item_id>/delete")
+@admin_required
+def exp_delete(item_id):
+    item = get_exp_item(DB_PATH, item_id)
+    if not item:
+        abort(404)
+    delete_exp_item(DB_PATH, item_id)
+    flash("Expired item deleted", "warning")
+    return redirect(url_for("info_view", info_id=item["info_id"]))
+
+
+# ---------------- Contacts ----------------
+@app.get("/contacts")
+@login_required
+def contacts():
+    contacts_list = list_contacts(DB_PATH)
+    return render_template("contacts/list.html", contacts=contacts_list)
+
+
+@app.route("/contacts/add", methods=["GET", "POST"])
+@admin_required
+def contacts_add():
+    shops_list = list_shops(DB_PATH)
+
+    if request.method == "POST":
+        shop_id = request.form.get("shop_id")
+        manager_name = (request.form.get("manager_name") or "").strip()
+        age = (request.form.get("age") or "").strip()
+        address = (request.form.get("address") or "").strip()
+
+        errors = []
+        if not shop_id:
+            errors.append("Shop is required.")
+        if not manager_name:
+            errors.append("Manager Name is required.")
+        if age == "":
+            errors.append("Age is required.")
+        else:
+            try:
+                int(age)
+            except:
+                errors.append("Age must be a number.")
+        if not address:
+            errors.append("Address is required.")
+
+        if errors:
+            for e in errors:
+                flash(e, "danger")
+            return render_template("contacts/add_edit.html", mode="add", shops=shops_list, contact=None)
+
+        create_contact(DB_PATH, int(shop_id), manager_name, int(age), address)
+        flash("Contact saved", "success")
+        return redirect(url_for("contacts"))
+
+    return render_template("contacts/add_edit.html", mode="add", shops=shops_list, contact=None)
+
+
+@app.route("/contacts/<int:contact_id>/edit", methods=["GET", "POST"])
+@admin_required
+def contacts_edit(contact_id):
+    shops_list = list_shops(DB_PATH)
+    c = get_contact(DB_PATH, contact_id)
+    if not c:
+        abort(404)
+
+    if request.method == "POST":
+        shop_id = request.form.get("shop_id")
+        manager_name = (request.form.get("manager_name") or "").strip()
+        age = (request.form.get("age") or "").strip()
+        address = (request.form.get("address") or "").strip()
+
+        errors = []
+        if not shop_id:
+            errors.append("Shop is required.")
+        if not manager_name:
+            errors.append("Manager Name is required.")
+        try:
+            int(age)
+        except:
+            errors.append("Age must be a number.")
+        if not address:
+            errors.append("Address is required.")
+
+        if errors:
+            for e in errors:
+                flash(e, "danger")
+            return render_template("contacts/add_edit.html", mode="edit", shops=shops_list, contact=c)
+
+        update_contact(DB_PATH, contact_id, int(shop_id), manager_name, int(age), address)
+        flash("Contact updated", "success")
+        return redirect(url_for("contacts"))
+
+    return render_template("contacts/add_edit.html", mode="edit", shops=shops_list, contact=c)
+
+
+@app.post("/contacts/<int:contact_id>/delete")
+@admin_required
+def contacts_delete(contact_id):
+    delete_contact(DB_PATH, contact_id)
+    flash("Contact deleted", "warning")
+    return redirect(url_for("contacts"))
+
+
+# ---------------- PDF ----------------
+@app.route("/pdf", methods=["GET", "POST"])
+@login_required
+def pdf_page():
+    shops_list = list_shops(DB_PATH)
+    selected_shop_id = request.form.get("shop_id") if request.method == "POST" else request.args.get("shop_id")
+    selected_date = request.form.get("date_key") if request.method == "POST" else request.args.get("date_key")
+
+    dates = []
+    if selected_shop_id:
+        dates = list_info_dates_for_shop(DB_PATH, int(selected_shop_id))
+
+    return render_template(
+        "pdf/page.html",
+        shops=shops_list,
+        dates=dates,
+        selected_shop_id=selected_shop_id,
+        selected_date=selected_date
+    )
+
+
+@app.get("/pdf/download")
+@login_required
+def pdf_download():
+    shop_id = request.args.get("shop_id", type=int)
+    date_key = request.args.get("date_key", type=str)
+
+    if not shop_id or not date_key:
+        flash("Select Shop and Date", "danger")
+        return redirect(url_for("pdf_page"))
+
+    info_id = int(date_key)
+    info = get_info(DB_PATH, info_id)
+    if not info or info["shop_id"] != shop_id:
+        abort(404)
+
+    shop = get_shop(DB_PATH, shop_id)
+    items = list_exp_items(DB_PATH, info_id)
+
+    out_dir = APP_DIR / "generated_pdfs"
+    out_dir.mkdir(exist_ok=True)
+    filename = f"{slugify(shop['name'])}_{info['created_at'].replace(':','-').replace(' ','_')}.pdf"
+    out_path = out_dir / filename
+
+    build_exp_items_pdf(out_path, shop["name"], info["created_at"], items)
+    return send_file(out_path, as_attachment=True, download_name=filename)
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
+
+
+models.py
+
+import sqlite3
+from datetime import datetime
+from werkzeug.security import generate_password_hash, check_password_hash
+
+def dict_factory(cursor, row):
+    d = {}
+    for idx, col in enumerate(cursor.description):
+        d[col[0]] = row[idx]
+    return d
+
+def get_conn(db_path: str):
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = dict_factory
+    conn.execute("PRAGMA foreign_keys = ON;")
+    return conn
+
+def init_db(db_path: str):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL CHECK(role IN ('admin','user'))
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS shops (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL,
+        location TEXT NOT NULL,
+        shop_type TEXT NOT NULL CHECK(shop_type IN ('Co-Op','Mini Co-Op','Regional')),
+        pos_system TEXT NOT NULL CHECK(pos_system IN ('Yes','No')),
+        shop_photo TEXT,
+        created_at TEXT NOT NULL
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS information (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        shop_id INTEGER NOT NULL,
+        clean TEXT NOT NULL CHECK(clean IN ('Best','Good','Not Bad','Super')),
+        management TEXT NOT NULL CHECK(management IN ('Best','Good','Not Bad','Super')),
+        environment TEXT NOT NULL CHECK(environment IN ('Best','Good','Not Bad','Super')),
+        quality TEXT NOT NULL CHECK(quality IN ('Best','Good','Not Bad','Super')),
+        expired TEXT NOT NULL CHECK(expired IN ('Yes','No')),
+        expired_amount INTEGER NOT NULL,
+        expired_photo TEXT,
+        other TEXT NOT NULL CHECK(other IN ('Yes','No')),
+        other_message TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(shop_id) REFERENCES shops(id) ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS exp_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        info_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        exp_d TEXT NOT NULL,
+        mf_d TEXT NOT NULL,
+        amount INTEGER NOT NULL,
+        price REAL NOT NULL,
+        FOREIGN KEY(info_id) REFERENCES information(id) ON DELETE CASCADE
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS contacts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        shop_id INTEGER NOT NULL,
+        manager_name TEXT NOT NULL,
+        age INTEGER NOT NULL,
+        address TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(shop_id) REFERENCES shops(id) ON DELETE CASCADE
+    );
+    """)
+
+    conn.commit()
+    conn.close()
+
+# ---------------- Users ----------------
+def ensure_first_admin(db_path: str, username: str, password: str):
+    """Create the first admin ONLY if no users exist."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) AS c FROM users;")
+    c = cur.fetchone()["c"]
+    if c == 0:
+        cur.execute(
+            "INSERT INTO users (username,password_hash,role) VALUES (?,?,?)",
+            (username, generate_password_hash(password), "admin")
+        )
+        conn.commit()
+    conn.close()
+
+def create_user(db_path: str, username: str, password: str, role: str):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO users (username,password_hash,role) VALUES (?,?,?)",
+        (username, generate_password_hash(password), role)
+    )
+    conn.commit()
+    conn.close()
+
+def get_user_by_username(db_path: str, username: str):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM users WHERE username=?;", (username,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+def verify_password(password: str, password_hash: str) -> bool:
+    return check_password_hash(password_hash, password)
+
+# ---------------- Shops ----------------
+def list_shops(db_path: str):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM shops ORDER BY name;")
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+def get_shop(db_path: str, shop_id: int):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM shops WHERE id=?;", (shop_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+def create_shop(db_path: str, name: str, location: str, shop_type: str, pos_system: str, shop_photo: str | None):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO shops (name, location, shop_type, pos_system, shop_photo, created_at)
+        VALUES (?,?,?,?,?,?);
+    """, (name, location, shop_type, pos_system, shop_photo, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    conn.commit()
+    conn.close()
+
+def update_shop(db_path: str, shop_id: int, name: str, location: str, shop_type: str, pos_system: str, shop_photo: str | None):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE shops SET name=?, location=?, shop_type=?, pos_system=?, shop_photo=?
+        WHERE id=?;
+    """, (name, location, shop_type, pos_system, shop_photo, shop_id))
+    conn.commit()
+    conn.close()
+
+def delete_shop(db_path: str, shop_id: int):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM shops WHERE id=?;", (shop_id,))
+    conn.commit()
+    conn.close()
+
+# ---------------- Information ----------------
+def list_info_summaries(db_path: str):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT information.id AS id, information.shop_id AS shop_id, shops.name AS shop_name, information.created_at AS created_at
+        FROM information
+        JOIN shops ON shops.id = information.shop_id
+        ORDER BY information.id DESC;
+    """)
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+def list_info_dates_for_shop(db_path: str, shop_id: int):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, created_at FROM information
+        WHERE shop_id=?
+        ORDER BY id DESC;
+    """, (shop_id,))
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+def get_info(db_path: str, info_id: int):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM information WHERE id=?;", (info_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+def create_info(db_path: str, shop_id: int,
+                clean: str, management: str, environment: str, quality: str,
+                expired: str, expired_amount: int, expired_photo: str | None,
+                other: str, other_message: str | None):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO information (
+            shop_id, clean, management, environment, quality,
+            expired, expired_amount, expired_photo,
+            other, other_message, created_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?);
+    """, (
+        shop_id, clean, management, environment, quality,
+        expired, expired_amount, expired_photo,
+        other, other_message,
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ))
+    info_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return info_id
+
+def update_info(db_path: str, info_id: int, shop_id: int,
+                clean: str, management: str, environment: str, quality: str,
+                expired: str, expired_amount: int, expired_photo: str | None,
+                other: str, other_message: str | None):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE information SET
+            shop_id=?, clean=?, management=?, environment=?, quality=?,
+            expired=?, expired_amount=?, expired_photo=?,
+            other=?, other_message=?
+        WHERE id=?;
+    """, (
+        shop_id, clean, management, environment, quality,
+        expired, expired_amount, expired_photo,
+        other, other_message,
+        info_id
+    ))
+    conn.commit()
+    conn.close()
+
+def delete_info(db_path: str, info_id: int):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM information WHERE id=?;", (info_id,))
+    conn.commit()
+    conn.close()
+
+# ---------------- Exp Items ----------------
+def list_exp_items(db_path: str, info_id: int):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM exp_items WHERE info_id=? ORDER BY id DESC;", (info_id,))
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+def create_exp_item(db_path: str, info_id: int, name: str, exp_d: str, mf_d: str, amount: int, price: float):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO exp_items (info_id, name, exp_d, mf_d, amount, price)
+        VALUES (?,?,?,?,?,?);
+    """, (info_id, name, exp_d, mf_d, amount, price))
+    conn.commit()
+    conn.close()
+
+def get_exp_item(db_path: str, item_id: int):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM exp_items WHERE id=?;", (item_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+def update_exp_item(db_path: str, item_id: int, name: str, exp_d: str, mf_d: str, amount: int, price: float):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE exp_items SET name=?, exp_d=?, mf_d=?, amount=?, price=? WHERE id=?;
+    """, (name, exp_d, mf_d, amount, price, item_id))
+    conn.commit()
+    conn.close()
+
+def delete_exp_item(db_path: str, item_id: int):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM exp_items WHERE id=?;", (item_id,))
+    conn.commit()
+    conn.close()
+
+# ---------------- Contacts ----------------
+def list_contacts(db_path: str):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT contacts.*, shops.name AS shop_name
+        FROM contacts JOIN shops ON shops.id = contacts.shop_id
+        ORDER BY contacts.id DESC;
+    """)
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+def get_contact(db_path: str, contact_id: int):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM contacts WHERE id=?;", (contact_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+def create_contact(db_path: str, shop_id: int, manager_name: str, age: int, address: str):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO contacts (shop_id, manager_name, age, address, created_at)
+        VALUES (?,?,?,?,?);
+    """, (shop_id, manager_name, age, address, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    conn.commit()
+    conn.close()
+
+def update_contact(db_path: str, contact_id: int, shop_id: int, manager_name: str, age: int, address: str):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE contacts SET shop_id=?, manager_name=?, age=?, address=? WHERE id=?;
+    """, (shop_id, manager_name, age, address, contact_id))
+    conn.commit()
+    conn.close()
+
+def delete_contact(db_path: str, contact_id: int):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM contacts WHERE id=?;", (contact_id,))
+    conn.commit()
+    conn.close()
+
+
+pdf_utills.py
+
+from pathlib import Path
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.pdfgen import canvas
+
+def build_exp_items_pdf(out_path: Path, shop_name: str, info_date: str, exp_items: list[dict]):
+    out_path = Path(out_path)
+    c = canvas.Canvas(str(out_path), pagesize=A4)
+    w, h = A4
+
+    c.setFont("Helvetica-Bold", 16)
+    c.drawCentredString(w / 2, h - 25 * mm, shop_name)
+
+    c.setFont("Helvetica", 11)
+    c.drawCentredString(w / 2, h - 33 * mm, f"Information Date: {info_date}")
+
+    left = 20 * mm
+    top = h - 45 * mm
+    row_h = 8 * mm
+    col1 = 85 * mm
+    col2 = 45 * mm
+    col3 = 35 * mm
+
+    c.setFont("Helvetica-Bold", 11)
+    c.rect(left, top, col1, row_h)
+    c.rect(left + col1, top, col2, row_h)
+    c.rect(left + col1 + col2, top, col3, row_h)
+
+    c.drawString(left + 2 * mm, top + 2.2 * mm, "Name")
+    c.drawString(left + col1 + 2 * mm, top + 2.2 * mm, "EXP.D")
+    c.drawString(left + col1 + col2 + 2 * mm, top + 2.2 * mm, "AMOUNT")
+
+    c.setFont("Helvetica", 10)
+    y = top - row_h
+
+    for i in range(25):
+        item = exp_items[i] if i < len(exp_items) else None
+
+        c.rect(left, y, col1, row_h)
+        c.rect(left + col1, y, col2, row_h)
+        c.rect(left + col1 + col2, y, col3, row_h)
+
+        if item:
+            name = str(item.get("name", ""))[:45]
+            exp_d = str(item.get("exp_d", ""))[:15]
+            amt = str(item.get("amount", ""))
+
+            c.drawString(left + 2 * mm, y + 2.2 * mm, name)
+            c.drawString(left + col1 + 2 * mm, y + 2.2 * mm, exp_d)
+            c.drawRightString(left + col1 + col2 + col3 - 2 * mm, y + 2.2 * mm, amt)
+
+        y -= row_h
+
+    c.setFont("Helvetica", 11)
+    c.drawString(left, 18 * mm, "Checked By: ________________________________")
+
+    c.showPage()
+    c.save()
+    return out_path
+ 
+base.html
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>{% block title %}Shop Quality System{% endblock %}</title>
+
+  <!-- Global theme CSS -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+
+  {% block page_css %}{% endblock %}
+</head>
+
+<body>
+
+  <!-- App Shell -->
+  <div class="app-shell">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-badge">
+          <span class="brand-dot"></span>
+          <span>Secure Portal</span>
+        </div>
+
+        <div class="brand-title">Shop Quality System</div>
+        <div class="brand-sub">Admin • User • PDF • Uploads</div>
+      </div>
+
+      <nav class="nav">
+        <a class="nav-item" href="{{ url_for('dashboard') }}">Dashboard</a>
+        <a class="nav-item" href="{{ url_for('shops') }}">Shops</a>
+        <a class="nav-item" href="{{ url_for('information') }}">Information</a>
+        <a class="nav-item" href="{{ url_for('contacts') }}">Contacts</a>
+        <a class="nav-item" href="{{ url_for('pdf_page') }}">PDF</a>
+
+        <div class="nav-sep"></div>
+
+        <a class="nav-item nav-danger" href="{{ url_for('logout') }}">Logout</a>
+      </nav>
+
+      <div class="side-footer">
+        <div class="pill-row">
+          <span class="pill">Mobile Friendly</span>
+          <span class="pill">Uploads</span>
+          <span class="pill">PDF Export</span>
+          <span class="pill">Admin Control</span>
+        </div>
+
+        <div class="support">
+          If you have alerts, contact: <b>0764247716</b>
+        </div>
+
+        <div class="copy">
+          © <span id="year"></span> — <b>Induwara Thathsara</b>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main content -->
+    <main class="content">
+
+      <!-- Topbar -->
+      <header class="topbar">
+        <div class="topbar-left">
+          <h1 class="page-title">{% block page_title %}{% endblock %}</h1>
+          <p class="page-sub">{% block page_subtitle %}{% endblock %}</p>
+        </div>
+
+        <div class="topbar-right">
+          {% if session.get("user") %}
+            <div class="user-chip">
+              <span class="user-dot"></span>
+              <div class="user-meta">
+                <div class="user-name">{{ session.get("user").get("username") }}</div>
+                <div class="user-role">{{ session.get("user").get("role") }}</div>
+              </div>
+            </div>
+          {% endif %}
+
+          {% block top_actions %}{% endblock %}
+        </div>
+      </header>
+
+      <!-- Flash messages -->
+      <div class="flash-area">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for cat, msg in messages %}
+              <div class="flash {{ cat }}">{{ msg }}</div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+      </div>
+
+      <!-- Page content -->
+      <section class="page">
+        {% block content %}{% endblock %}
+      </section>
+
+    </main>
+
+  </div>
+
+  <script>
+    document.getElementById("year").textContent = new Date().getFullYear();
+  </script>
+
+  {% block page_js %}{% endblock %}
+</body>
+</html>
+
+pdf/page.html
+
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <h3 class="mb-0">PDF</h3>
+</div>
+
+<div class="card p-4">
+  <form method="post" class="row g-3">
+    <div class="col-12 col-lg-6">
+      <label class="form-label">Select Shop</label>
+      <select class="form-select" name="shop_id" onchange="this.form.submit()" required>
+        <option value="" disabled {{ 'selected' if not selected_shop_id }}>Select shop</option>
+        {% for s in shops %}
+          <option value="{{ s.id }}" {% if selected_shop_id and selected_shop_id|int == s.id %}selected{% endif %}>{{ s.name }}</option>
+        {% endfor %}
+      </select>
+      <div class="form-text">After selecting shop, dates will load.</div>
+    </div>
+
+    <div class="col-12 col-lg-6">
+      <label class="form-label">Select Date</label>
+      <select class="form-select" name="date_key" required>
+        <option value="" disabled {{ 'selected' if not selected_date }}>Select date</option>
+        {% for d in dates %}
+          <option value="{{ d.id }}" {% if selected_date and selected_date|int == d.id %}selected{% endif %}>
+            {{ d.created_at }}
+          </option>
+        {% endfor %}
+      </select>
+      <div class="form-text">Only dates where Information was saved.</div>
+    </div>
+
+    <div class="col-12 d-flex gap-2">
+      <a class="btn btn-outline-secondary" href="{{ url_for('pdf_page') }}">Reset</a>
+      <button class="btn btn-primary" type="submit">Load</button>
+
+      {% if selected_shop_id and selected_date %}
+      <a class="btn btn-dark ms-auto" href="{{ url_for('pdf_download', shop_id=selected_shop_id, date_key=selected_date) }}">
+        Download PDF
+      </a>
+      {% endif %}
+    </div>
+  </form>
+
+  <hr>
+  <div class="text-secondary">
+    PDF includes <b>25 rows</b> and columns: <b>Name, EXP.D, AMOUNT</b> + <b>Checked By</b>.
+  </div>
+</div>
+{% endblock %}

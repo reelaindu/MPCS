@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-center justify-content-between mb-3">
+  <h3 class="mb-0">Contact</h3>
+  {% if session.user.role == "admin" %}
+  <a class="btn btn-primary" href="{{ url_for('contacts_add') }}">Add contact</a>
+  {% endif %}
+</div>
+
+<div class="card p-3">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>Shop</th>
+          <th>Manager</th>
+          <th class="text-end">Age</th>
+          <th>Address</th>
+          <th class="text-end">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in contacts %}
+        <tr>
+          <td class="fw-semibold">{{ c.shop_name }}</td>
+          <td>{{ c.manager_name }}</td>
+          <td class="text-end">{{ c.age }}</td>
+          <td>{{ c.address }}</td>
+          <td class="text-end">
+            {% if session.user.role == "admin" %}
+              <a class="btn btn-sm btn-outline-primary" href="{{ url_for('contacts_edit', contact_id=c.id) }}">Edit</a>
+              <form method="post" action="{{ url_for('contacts_delete', contact_id=c.id) }}" class="d-inline"
+                    onsubmit="return confirm('Delete contact?')">
+                <button class="btn btn-sm btn-outline-danger">Delete</button>
+              </form>
+            {% else %}
+              <span class="text-secondary small">View only</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        {% if contacts|length == 0 %}
+        <tr><td colspan="5" class="text-center text-secondary py-4">No contacts yet</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

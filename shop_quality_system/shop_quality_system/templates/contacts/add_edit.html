@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <h3 class="mb-0">{{ "Add contact" if mode=="add" else "Edit contact" }}</h3>
+  <a class="btn btn-outline-secondary" href="{{ url_for('contacts') }}">Back</a>
+</div>
+
+<div class="card p-4">
+  <form method="post">
+    <div class="row g-3">
+      <div class="col-12">
+        <label class="form-label">Shop</label>
+        <select class="form-select" name="shop_id" required>
+          <option value="" disabled {{ 'selected' if not contact }}>Select shop</option>
+          {% for s in shops %}
+            <option value="{{ s.id }}" {% if contact and contact.shop_id==s.id %}selected{% endif %}>{{ s.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-12 col-lg-6">
+        <label class="form-label">Manager Name</label>
+        <input class="form-control" name="manager_name" required value="{{ contact.manager_name if contact else '' }}">
+      </div>
+
+      <div class="col-12 col-lg-6">
+        <label class="form-label">Age</label>
+        <input class="form-control" name="age" required value="{{ contact.age if contact else '' }}">
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Address</label>
+        <input class="form-control" name="address" required value="{{ contact.address if contact else '' }}">
+      </div>
+
+      <div class="col-12 d-flex gap-2">
+        <button class="btn btn-primary">Save</button>
+        <a class="btn btn-outline-secondary" href="{{ url_for('contacts') }}">Cancel</a>
+      </div>
+    </div>
+  </form>
+</div>
+{% endblock %}

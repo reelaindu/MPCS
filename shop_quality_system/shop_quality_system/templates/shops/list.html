@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <h3 class="mb-0">Shops</h3>
+  {% if session.user.role == "admin" %}
+  <a class="btn btn-primary" href="{{ url_for('shops_add') }}">Add shop</a>
+  {% endif %}
+</div>
+
+<div class="card p-3">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>Name</th>
+          <th>Location</th>
+          <th>Shop type</th>
+          <th>POS</th>
+          <th>Photo</th>
+          <th class="text-end">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in shops %}
+        <tr>
+          <td class="fw-semibold">{{ s.name }}</td>
+          <td>{{ s.location }}</td>
+          <td><span class="badge text-bg-secondary">{{ s.shop_type }}</span></td>
+          <td><span class="badge text-bg-info">{{ s.pos_system }}</span></td>
+          <td>
+            {% if s.shop_photo %}
+              <a href="{{ url_for('static', filename=s.shop_photo) }}" target="_blank">View</a>
+            {% else %}
+              <span class="text-secondary">—</span>
+            {% endif %}
+          </td>
+          <td class="text-end">
+            {% if session.user.role == "admin" %}
+              <a class="btn btn-sm btn-outline-primary" href="{{ url_for('shops_edit', shop_id=s.id) }}">Edit</a>
+              <form method="post" action="{{ url_for('shops_delete', shop_id=s.id) }}" class="d-inline"
+                    onsubmit="return confirm('Delete this shop? This also deletes its folder.')">
+                <button class="btn btn-sm btn-outline-danger">Delete</button>
+              </form>
+            {% else %}
+              <span class="text-secondary small">View only</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        {% if shops|length == 0 %}
+        <tr><td colspan="6" class="text-center text-secondary py-4">No shops yet</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

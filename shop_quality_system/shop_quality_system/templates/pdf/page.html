@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <h3 class="mb-0">PDF</h3>
+</div>
+
+<div class="card p-4">
+  <form method="post" class="row g-3">
+    <div class="col-12 col-lg-6">
+      <label class="form-label">Select Shop</label>
+      <select class="form-select" name="shop_id" onchange="this.form.submit()" required>
+        <option value="" disabled {{ 'selected' if not selected_shop_id }}>Select shop</option>
+        {% for s in shops %}
+          <option value="{{ s.id }}" {% if selected_shop_id and selected_shop_id|int == s.id %}selected{% endif %}>{{ s.name }}</option>
+        {% endfor %}
+      </select>
+      <div class="form-text">After selecting shop, dates will load.</div>
+    </div>
+
+    <div class="col-12 col-lg-6">
+      <label class="form-label">Select Date</label>
+      <select class="form-select" name="date_key" required>
+        <option value="" disabled {{ 'selected' if not selected_date }}>Select date</option>
+        {% for d in dates %}
+          <option value="{{ d.id }}" {% if selected_date and selected_date|int == d.id %}selected{% endif %}>
+            {{ d.created_at }}
+          </option>
+        {% endfor %}
+      </select>
+      <div class="form-text">Only dates where Information was saved.</div>
+    </div>
+
+    <div class="col-12 d-flex gap-2 flex-wrap">
+      <a class="btn btn-outline-secondary" href="{{ url_for('pdf_page') }}">Reset</a>
+      <button class="btn btn-primary" type="submit">Load</button>
+
+      {% if selected_shop_id and selected_date %}
+      <a class="btn btn-dark ms-auto" href="{{ url_for('pdf_download_expired', shop_id=selected_shop_id, date_key=selected_date) }}">
+        Download Expired PDF
+      </a>
+
+      <a class="btn btn-success" href="{{ url_for('pdf_download_fast_items', shop_id=selected_shop_id, date_key=selected_date) }}">
+        Download Fast Items PDF
+      </a>
+      {% endif %}
+    </div>
+  </form>
+
+  <hr>
+  <div class="text-secondary">
+    <div><b>Expired PDF</b> → Name, EXP.D, AMOUNT + Checked By</div>
+    <div><b>Fast Items PDF</b> → Shop, Date, Time, Inspector, Fast Item, Brand, Discount, Price, Message + Checked By</div>
+  </div>
+</div>
+{% endblock %}

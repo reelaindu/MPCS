@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Brands{% endblock %}
+{% block page_title %}Brands{% endblock %}
+{% block page_subtitle %}Manage fast item brands{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+  <h3 class="mb-0">Brands</h3>
+  {% if session.get("user") and session.get("user").get("role") == "admin" %}
+  <a class="btn btn-primary" href="{{ url_for('fast_items_brand_add') }}">Add Brand</a>
+  {% endif %}
+</div>
+
+<div class="card p-4">
+  {% if brands %}
+  <div class="table-responsive">
+    <table class="table table-bordered align-middle">
+      <thead>
+        <tr>
+          <th>Brand Name</th>
+          <th>Created At</th>
+          {% if session.get("user") and session.get("user").get("role") == "admin" %}
+          <th style="width:180px;">Actions</th>
+          {% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for b in brands %}
+        <tr>
+          <td>{{ b.brand_name }}</td>
+          <td>{{ b.created_at }}</td>
+          {% if session.get("user") and session.get("user").get("role") == "admin" %}
+          <td>
+            <div class="d-flex gap-2">
+              <a class="btn btn-sm btn-outline-primary" href="{{ url_for('fast_items_brand_edit', brand_id=b.id) }}">Edit</a>
+              <form method="post" action="{{ url_for('fast_items_brand_delete', brand_id=b.id) }}" onsubmit="return confirm('Delete this brand?')">
+                <button class="btn btn-sm btn-outline-danger">Delete</button>
+              </form>
+            </div>
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <div class="text-secondary">No brands added yet.</div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-center justify-content-between mb-3">
+  <h3 class="mb-0">Information</h3>
+  {% if session.user.role == "admin" %}
+  <a class="btn btn-primary" href="{{ url_for('info_add') }}">Add information</a>
+  {% endif %}
+</div>
+
+<div class="card p-3">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>Shop</th>
+          <th>Date</th>
+          <th>Time</th>
+          <th class="text-end">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for x in summaries %}
+        {% set dt = x.created_at.split(' ') %}
+        <tr>
+          <td class="fw-semibold">{{ x.shop_name }}</td>
+          <td>{{ dt[0] }}</td>
+          <td>{{ dt[1] if dt|length>1 else "" }}</td>
+          <td class="text-end">
+            <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('info_view', info_id=x.id) }}">Open</a>
+            {% if session.user.role == "admin" %}
+              <a class="btn btn-sm btn-outline-primary" href="{{ url_for('info_edit', info_id=x.id) }}">Edit</a>
+              <form method="post" action="{{ url_for('info_delete', info_id=x.id) }}" class="d-inline"
+                    onsubmit="return confirm('Delete this record?')">
+                <button class="btn btn-sm btn-outline-danger">Delete</button>
+              </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        {% if summaries|length == 0 %}
+          <tr><td colspan="4" class="text-center text-secondary py-4">No information records yet</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

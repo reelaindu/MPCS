@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <h3 class="mb-0">{{ "Add shop" if mode=="add" else "Edit shop" }}</h3>
+  <a class="btn btn-outline-secondary" href="{{ url_for('shops') }}">Back</a>
+</div>
+
+<div class="card p-4">
+  <form method="post" enctype="multipart/form-data">
+    <div class="row g-3">
+      <div class="col-12 col-lg-6">
+        <label class="form-label">Name</label>
+        <input class="form-control" name="name" required value="{{ shop.name if shop else '' }}">
+      </div>
+
+      <div class="col-12 col-lg-6">
+        <label class="form-label">Location</label>
+        <input class="form-control" name="location" required value="{{ shop.location if shop else '' }}">
+      </div>
+
+      <div class="col-12 col-lg-6">
+        <label class="form-label">Shop type</label>
+        <select class="form-select" name="shop_type" required>
+          <option value="" disabled {{ 'selected' if not shop }}>Select</option>
+          {% for opt in ["Co-Op","Mini Co-Op","Regional"] %}
+          <option value="{{ opt }}" {% if shop and shop.shop_type==opt %}selected{% endif %}>{{ opt }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-12 col-lg-6">
+        <label class="form-label">POS system</label>
+        <select class="form-select" name="pos_system" required>
+          <option value="" disabled {{ 'selected' if not shop }}>Select</option>
+          {% for opt in ["Yes","No"] %}
+          <option value="{{ opt }}" {% if shop and shop.pos_system==opt %}selected{% endif %}>{{ opt }}</option>
+          {% endfor %}
+        </select>
+        <div class="form-text">Yes/No must be selected.</div>
+      </div>
+
+      <div class="col-12">
+        <label class="form-label">Shop photo</label>
+        <input class="form-control" type="file" name="shop_photo" accept="image/*">
+        {% if shop and shop.shop_photo %}
+          <div class="mt-2">
+            Current: <a href="{{ url_for('static', filename=shop.shop_photo) }}" target="_blank">View</a>
+          </div>
+        {% endif %}
+      </div>
+
+      <div class="col-12 d-flex gap-2">
+        <button class="btn btn-primary">Save</button>
+        <a class="btn btn-outline-secondary" href="{{ url_for('shops') }}">Cancel</a>
+      </div>
+    </div>
+  </form>
+</div>
+{% endblock %}

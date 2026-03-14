@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Fast Item{% endblock %}
+{% block page_title %}Fast Item{% endblock %}
+{% block page_subtitle %}{{ "Add new fast item" if mode=="add" else "Edit fast item" }}{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <h3 class="mb-0">{{ "Add Fast Item" if mode=="add" else "Edit Fast Item" }}</h3>
+  <a class="btn btn-outline-secondary" href="{{ url_for('fast_items') }}">Back</a>
+</div>
+
+<div class="card p-4">
+  <form method="post" class="row g-3">
+    <div class="col-12 col-lg-6">
+      <label class="form-label">Shop</label>
+      <select class="form-select" name="shop_id" required>
+        <option value="" disabled {{ 'selected' if not item }}>Select shop</option>
+        {% for s in shops %}
+          <option value="{{ s.id }}" {% if item and item.shop_id==s.id %}selected{% endif %}>{{ s.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="col-12 col-lg-6">
+      <label class="form-label">Brand</label>
+      <select class="form-select" name="brand_id" required>
+        <option value="" disabled {{ 'selected' if not item }}>Select brand</option>
+        {% for b in brands %}
+          <option value="{{ b.id }}" {% if item and item.brand_id==b.id %}selected{% endif %}>{{ b.brand_name }}</option>
+        {% endfor %}
+      </select>
+      <div class="form-text">
+        Brand list comes from <a href="{{ url_for('fast_items_brands') }}">Add Brand</a>.
+      </div>
+    </div>
+
+    <div class="col-12">
+      <label class="form-label">Item Name</label>
+      <input class="form-control" name="item_name" required value="{{ item.item_name if item else '' }}" placeholder="Enter item name">
+    </div>
+
+    <div class="col-12 col-lg-6">
+      <label class="form-label">Discount</label>
+      <input class="form-control" name="discount" required value="{{ item.discount if item else '' }}" placeholder="Example: 10% / Rs.100 off">
+    </div>
+
+    <div class="col-12 col-lg-6">
+      <label class="form-label">Price</label>
+      <input class="form-control" name="price" required value="{{ item.price if item else '' }}" placeholder="0.00">
+    </div>
+
+    <div class="col-12 d-flex gap-2">
+      <button class="btn btn-primary">Save</button>
+      <a class="btn btn-outline-secondary" href="{{ url_for('fast_items') }}">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

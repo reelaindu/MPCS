@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <h3 class="mb-0">Edit Exp Item</h3>
+  <a class="btn btn-outline-secondary" href="{{ url_for('info_view', info_id=item.info_id) }}">Back</a>
+</div>
+
+<div class="card p-4">
+  <form method="post">
+    <div class="row g-3">
+      <div class="col-12">
+        <label class="form-label">Name</label>
+        <input class="form-control" name="name" value="{{ item.name }}" required>
+      </div>
+      <div class="col-6">
+        <label class="form-label">EXP.D</label>
+        <input class="form-control" type="date" name="exp_d" value="{{ item.exp_d }}" required>
+      </div>
+      <div class="col-6">
+        <label class="form-label">MF.D</label>
+        <input class="form-control" type="date" name="mf_d" value="{{ item.mf_d }}" required>
+      </div>
+      <div class="col-6">
+        <label class="form-label">Amount</label>
+        <input class="form-control" name="amount" value="{{ item.amount }}" required>
+      </div>
+      <div class="col-6">
+        <label class="form-label">Price</label>
+        <input class="form-control" name="price" value="{{ item.price }}" required>
+      </div>
+      <div class="col-12 d-flex gap-2">
+        <button class="btn btn-primary">Save</button>
+        <a class="btn btn-outline-secondary" href="{{ url_for('info_view', info_id=item.info_id) }}">Cancel</a>
+      </div>
+    </div>
+  </form>
+</div>
+{% endblock %}

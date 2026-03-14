@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Fast Items{% endblock %}
+{% block page_title %}Fast Items{% endblock %}
+{% block page_subtitle %}Manage fast items and brands{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+  <h3 class="mb-0">Fast Items</h3>
+  <div class="d-flex gap-2">
+    <a class="btn btn-outline-secondary" href="{{ url_for('fast_items_brands') }}">Brands</a>
+    {% if session.get("user") and session.get("user").get("role") == "admin" %}
+    <a class="btn btn-primary" href="{{ url_for('fast_items_add') }}">Add Fast Item</a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card p-4">
+  {% if items %}
+  <div class="table-responsive">
+    <table class="table table-bordered align-middle">
+      <thead>
+        <tr>
+          <th>Shop</th>
+          <th>Brand</th>
+          <th>Item Name</th>
+          <th>Discount</th>
+          <th>Price</th>
+          <th>Submit Date</th>
+          {% if session.get("user") and session.get("user").get("role") == "admin" %}
+          <th style="width:180px;">Actions</th>
+          {% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for x in items %}
+        <tr>
+          <td>{{ x.shop_name }}</td>
+          <td>{{ x.brand_name }}</td>
+          <td>{{ x.item_name }}</td>
+          <td>{{ x.discount }}</td>
+          <td>{{ x.price }}</td>
+          <td>{{ x.created_at }}</td>
+          {% if session.get("user") and session.get("user").get("role") == "admin" %}
+          <td>
+            <div class="d-flex gap-2">
+              <a class="btn btn-sm btn-outline-primary" href="{{ url_for('fast_items_edit', item_id=x.id) }}">Edit</a>
+              <form method="post" action="{{ url_for('fast_items_delete', item_id=x.id) }}" onsubmit="return confirm('Delete this fast item?')">
+                <button class="btn btn-sm btn-outline-danger">Delete</button>
+              </form>
+            </div>
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <div class="text-secondary">No fast items added yet.</div>
+  {% endif %}
+</div>
+{% endblock %}

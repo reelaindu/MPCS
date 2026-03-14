@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+
+{% block page_title %}Information{% endblock %}
+{% block page_subtitle %}{{ "Add Information" if mode=="add" else "Edit Information" }}{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <h3 class="mb-0">{{ "Add Information" if mode=="add" else "Edit Information" }}</h3>
+  <a class="btn btn-outline-secondary" href="{{ url_for('information') }}">Back</a>
+</div>
+
+<div class="card p-4">
+  <!-- ✅ keep ONE form only -->
+  <form method="post" enctype="multipart/form-data" id="infoForm">
+    <div class="row g-3">
+      <div class="col-12">
+        <label class="form-label">Shop</label>
+        <select class="form-select" name="shop_id" required>
+          <option value="" disabled {{ 'selected' if not info }}>Select shop</option>
+          {% for s in shops %}
+            <option value="{{ s.id }}" {% if info and info.shop_id==s.id %}selected{% endif %}>{{ s.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      {% set rating_opts = ["Best","Good","Not Bad","Super"] %}
+      {% for key, label in [("clean","Clean"),("management","Management"),("environment","Environment"),("quality","Quality")] %}
+      <div class="col-12 col-lg-6">
+        <label class="form-label">{{ label }}</label>
+        <select class="form-select" name="{{ key }}" required>
+          <option value="" disabled {{ 'selected' if not info }}>Select</option>
+          {% for opt in rating_opts %}
+            <option value="{{ opt }}" {% if info and info[key]==opt %}selected{% endif %}>{{ opt }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endfor %}
+
+      <div class="col-12 col-lg-4">
+        <label class="form-label">Expired Items</label>
+        <select class="form-select" id="expiredSelect" name="expired" required>
+          <option value="" disabled {{ 'selected' if not info }}>Select</option>
+          {% for opt in ["Yes","No"] %}
+            <option value="{{ opt }}" {% if info and info.expired==opt %}selected{% endif %}>{{ opt }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-12 col-lg-4">
+        <label class="form-label">Expired Items Amount</label>
+        <input class="form-control" name="expired_amount" required value="{{ info.expired_amount if info else '' }}" placeholder="0">
+      </div>
+
+      <!-- ✅ show/hide box -->
+      <div class="col-12 col-lg-4" id="expiredPhotoBox"
+           style="display: {{ 'block' if (info and info.expired=='Yes') else 'none' }};">
+        <label class="form-label">Expired Items Photo</label>
+        <input class="form-control" type="file" name="expired_photo" accept="image/*">
+
+        {% if info and info.expired_photo %}
+          <div class="mt-2 d-flex gap-2 align-items-center flex-wrap">
+            <a class="btn btn-sm btn-outline-secondary"
+               href="{{ url_for('static', filename=info.expired_photo) }}" target="_blank">View</a>
+
+            <!-- ✅ NO nested form: use button that submits to another endpoint via formaction -->
+            <button
+              type="submit"
+              class="btn btn-sm btn-outline-danger"
+              formmethod="post"
+              formaction="{{ url_for('expired_photo_delete', info_id=info.id) }}"
+              onclick="return confirm('Delete expired photo?')"
+            >
+              Delete
+            </button>
+          </div>
+          <div class="form-text">Upload a new file to re-upload (replace).</div>
+        {% else %}
+          <div class="form-text">Required when Expired Items = Yes</div>
+        {% endif %}
+      </div>
+
+      <div class="col-12 col-lg-6">
+        <label class="form-label">Other</label>
+        <select class="form-select" id="otherSelect" name="other" required>
+          <option value="" disabled {{ 'selected' if not info }}>Select</option>
+          {% for opt in ["Yes","No"] %}
+            <option value="{{ opt }}" {% if info and info.other==opt %}selected{% endif %}>{{ opt }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <!-- ✅ show/hide box -->
+      <div class="col-12 col-lg-6" id="otherMessageBox"
+           style="display: {{ 'block' if (info and info.other=='Yes') else 'none' }};">
+        <label class="form-label">Other message</label>
+        <input class="form-control" name="other_message"
+               value="{{ info.other_message if info else '' }}"
+               placeholder="Write message">
+      </div>
+
+      <div class="col-12 d-flex gap-2">
+        <button class="btn btn-primary" type="submit">Save</button>
+        <a class="btn btn-outline-secondary" href="{{ url_for('information') }}">Cancel</a>
+      </div>
+    </div>
+  </form>
+</div>
+{% endblock %}
+
+{% block page_js %}
+<script>
+  function toggleExpiredPhoto() {
+    const sel = document.getElementById("expiredSelect");
+    const box = document.getElementById("expiredPhotoBox");
+    if (!sel || !box) return;
+    box.style.display = (sel.value === "Yes") ? "block" : "none";
+  }
+
+  function toggleOtherMessage() {
+    const sel = document.getElementById("otherSelect");
+    const box = document.getElementById("otherMessageBox");
+    if (!sel || !box) return;
+    box.style.display = (sel.value === "Yes") ? "block" : "none";
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    const expiredSelect = document.getElementById("expiredSelect");
+    const otherSelect = document.getElementById("otherSelect");
+
+    if (expiredSelect) expiredSelect.addEventListener("change", toggleExpiredPhoto);
+    if (otherSelect) otherSelect.addEventListener("change", toggleOtherMessage);
+
+    // init
+    toggleExpiredPhoto();
+    toggleOtherMessage();
+  });
+</script>
+{% endblock %}
